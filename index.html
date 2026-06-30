@@ -1,0 +1,288 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="description" content="강릉 지역 주요 해변의 실시간 날씨, 파고, 파도 정보 및 서핑/물놀이 지수를 제공하는 해양 기상 캐스터 어플리케이션입니다.">
+  <title>강릉 바다 날씨 & 파도 정보 캐스터</title>
+  
+  <!-- Google Fonts: Outfit & Noto Sans KR -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@300;400;500;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  
+  <!-- FontAwesome for Icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+  
+  <!-- Custom CSS -->
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <div class="app-container">
+    
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-logo">
+        <i class="fa-solid fa-water wave-icon-spin"></i>
+        <h1>GANGNEUNG<span>OCEAN</span></h1>
+      </div>
+      <div class="header-datetime" id="current-datetime">
+        2026. 06. 29. (월) 19:50
+      </div>
+      <button class="settings-btn" id="settings-open-btn" aria-label="설정">
+        <i class="fa-solid fa-gear"></i>
+      </button>
+    </header>
+
+    <!-- Main Content Layout -->
+    <main class="app-main">
+      
+      <!-- Beach Selection Area -->
+      <section class="beach-selector-section" aria-label="해변 선택">
+        <div class="section-title">
+          <h2><i class="fa-solid fa-map-location-dot"></i> 강릉 대표 해변 선택</h2>
+          <span class="pulse-indicator">실시간 중</span>
+        </div>
+        
+        <!-- Interactive Beach Cards -->
+        <div class="beach-cards-container" id="beach-cards">
+          <!-- Cards will be dynamically rendered by app.js -->
+        </div>
+      </section>
+
+      <!-- Dashboard Grid -->
+      <div class="dashboard-grid">
+        
+        <!-- Column 1: Wave Simulator & Activity Index -->
+        <div class="dashboard-col left-col">
+          
+          <!-- Live Wave Simulator Card -->
+          <div class="glass-card wave-simulator-card">
+            <div class="card-header">
+              <h3><i class="fa-solid fa-video"></i> 실시간 파도 시뮬레이션</h3>
+              <span class="live-tag">LIVE</span>
+            </div>
+            
+            <div class="canvas-container">
+              <canvas id="wave-canvas"></canvas>
+              
+              <!-- Floating info overlay on canvas -->
+              <div class="canvas-overlay">
+                <div class="overlay-stat">
+                  <span class="label">유의파고</span>
+                  <span class="value" id="overlay-wave-height">1.2m</span>
+                </div>
+                <div class="overlay-stat">
+                  <span class="label">파주기</span>
+                  <span class="value" id="overlay-wave-period">7.5s</span>
+                </div>
+              </div>
+            </div>
+            
+            <div class="simulator-controls">
+              <span class="simulator-desc">파고(높이)와 파주기(속도)에 맞추어 실시간으로 출렁이는 물리 파도 엔진입니다.</span>
+            </div>
+          </div>
+
+          <!-- Activity Recommendation Card -->
+          <div class="glass-card activity-card">
+            <div class="card-header">
+              <h3><i class="fa-solid fa-circle-info"></i> 오늘의 바다 활동 추천</h3>
+            </div>
+            <div class="activity-content">
+              <!-- Surfing Score -->
+              <div class="activity-box" id="surfing-box">
+                <div class="activity-icon-wrap surf-bg">
+                  <i class="fa-solid fa-person-surfing"></i>
+                </div>
+                <div class="activity-details">
+                  <h4>서핑 지수</h4>
+                  <div class="status-badge" id="surf-badge">적합</div>
+                  <p class="desc" id="surf-desc">적당한 파고와 약한 오프쇼어 바람으로 서핑하기 좋은 환경입니다.</p>
+                </div>
+                <div class="score-display">
+                  <span class="score-num" id="surf-score">85</span>
+                  <span class="score-max">/100</span>
+                </div>
+              </div>
+
+              <!-- Swimming Score -->
+              <div class="activity-box" id="swimming-box">
+                <div class="activity-icon-wrap swim-bg">
+                  <i class="fa-solid fa-person-swimming"></i>
+                </div>
+                <div class="activity-details">
+                  <h4>해수욕 지수</h4>
+                  <div class="status-badge" id="swim-badge">주의</div>
+                  <p class="desc" id="swim-desc">파도가 다소 높고 수온이 낮아 어린이 물놀이 시 주의가 필요합니다.</p>
+                </div>
+                <div class="score-display">
+                  <span class="score-num" id="swim-score">55</span>
+                  <span class="score-max">/100</span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Column 2: Weather & Ocean Stats & Forecast -->
+        <div class="dashboard-col right-col">
+          
+          <!-- Detailed Weather & Ocean Information -->
+          <div class="glass-card detail-stats-card">
+            <div class="card-header">
+              <h3><i class="fa-solid fa-chart-simple"></i> <span id="selected-beach-name">경포해변</span> 상세 실시간 데이터</h3>
+            </div>
+            
+            <div class="weather-summary-row">
+              <div class="weather-temp-large">
+                <span class="temp" id="main-temp">24.5°C</span>
+                <span class="status-text" id="main-sky"><i class="fa-solid fa-cloud-sun"></i> 구름조금</span>
+              </div>
+            </div>
+
+            <div class="stats-grid">
+              <!-- Wind -->
+              <div class="stat-item">
+                <div class="stat-icon"><i class="fa-solid fa-wind"></i></div>
+                <div class="stat-info">
+                  <span class="stat-label">풍향 · 풍속</span>
+                  <span class="stat-value" id="val-wind">남서풍 4.2m/s</span>
+                </div>
+              </div>
+              
+              <!-- Wave Height -->
+              <div class="stat-item highlight-item">
+                <div class="stat-icon"><i class="fa-solid fa-water"></i></div>
+                <div class="stat-info">
+                  <span class="stat-label">유의 파고</span>
+                  <span class="stat-value" id="val-wave-height">1.2m</span>
+                </div>
+              </div>
+
+              <!-- Wave Period -->
+              <div class="stat-item">
+                <div class="stat-icon"><i class="fa-solid fa-wave-square"></i></div>
+                <div class="stat-info">
+                  <span class="stat-label">파주기</span>
+                  <span class="stat-value" id="val-wave-period">7.5초</span>
+                </div>
+              </div>
+
+              <!-- Water Temp -->
+              <div class="stat-item">
+                <div class="stat-icon"><i class="fa-solid fa-thermometer"></i></div>
+                <div class="stat-info">
+                  <span class="stat-label">표층 수온</span>
+                  <span class="stat-value" id="val-water-temp">19.8°C</span>
+                </div>
+              </div>
+
+              <!-- Humidity -->
+              <div class="stat-item">
+                <div class="stat-icon"><i class="fa-solid fa-droplet"></i></div>
+                <div class="stat-info">
+                  <span class="stat-label">습도</span>
+                  <span class="stat-value" id="val-humidity">68%</span>
+                </div>
+              </div>
+
+              <!-- Tide -->
+              <div class="stat-item">
+                <div class="stat-icon"><i class="fa-solid fa-arrows-up-down"></i></div>
+                <div class="stat-info">
+                  <span class="stat-label">조석 (만/간조)</span>
+                  <span class="stat-value" id="val-tide">만조 14:20 (+42)</span>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Forecast Tabs & Container -->
+          <div class="glass-card forecast-card">
+            <div class="forecast-tabs">
+              <button class="forecast-tab active" id="tab-hourly">시간별 예보</button>
+              <button class="forecast-tab" id="tab-weekly">주간 예보</button>
+            </div>
+            
+            <div class="forecast-content">
+              <!-- Hourly Forecast Grid -->
+              <div class="forecast-timeline active" id="forecast-hourly-container">
+                <!-- Dynamically populated -->
+              </div>
+              
+              <!-- Weekly Forecast List -->
+              <div class="forecast-list" id="forecast-weekly-container">
+                <!-- Dynamically populated -->
+              </div>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>&copy; 2026 GANGNEUNG OCEAN CASTER. Data simulated for evaluation.</p>
+      <p>본 서비스는 실시간 기상/해양 빅데이터를 시뮬레이션하여 서핑 및 해변 활동을 지원합니다.</p>
+    </footer>
+
+    <!-- Settings Modal (API Key input and Data Customization) -->
+    <div class="modal-backdrop" id="settings-modal">
+      <div class="modal-content glass-card">
+        <div class="modal-header">
+          <h3><i class="fa-solid fa-gears"></i> 데이터 설정 및 API 연동</h3>
+          <button class="close-btn" id="settings-close-btn" aria-label="닫기">&times;</button>
+        </div>
+        <div class="modal-body">
+          <p class="settings-intro">현재 본 대시보드는 정밀하게 튜닝된 <strong>강릉 해변 맞춤형 시뮬레이션 모드</strong>로 작동 중입니다. 기상청 API 및 OpenWeatherMap API와 동기화하려면 정보를 입력하세요.</p>
+          
+          <div class="setting-group">
+            <label for="data-mode-select">데이터 모드</label>
+            <select id="data-mode-select">
+              <option value="simulated">강릉 바다 실시간 시뮬레이션 (추천)</option>
+              <option value="api">실시간 외부 API 동기화 모드</option>
+            </select>
+          </div>
+
+          <div class="api-inputs-wrap disabled" id="api-inputs-wrap">
+            <div class="setting-group">
+              <label for="openweathermap-api-key">OpenWeatherMap API Key</label>
+              <input type="password" id="openweathermap-api-key" placeholder="API Key를 입력하세요">
+              <small>해변의 실시간 날씨, 기온, 습도 정보를 가져옵니다.</small>
+            </div>
+            <div class="setting-group">
+              <label for="khoa-api-key">국립해양조사원 바다누리 API Key</label>
+              <input type="password" id="khoa-api-key" placeholder="API Key를 입력하세요">
+              <small>동해 관측소의 실시간 조석 및 파고 데이터를 연동합니다.</small>
+            </div>
+          </div>
+          
+          <div class="setting-group wave-customizer">
+            <label>수동 파도 커스터마이징 (테스트용)</label>
+            <div class="slider-row">
+              <span>파고 조절 (0.1m - 3.5m)</span>
+              <input type="range" id="custom-wave-height" min="0.1" max="3.5" step="0.1" value="1.2">
+              <span class="slider-val" id="custom-wave-height-val">1.2m</span>
+            </div>
+            <div class="slider-row">
+              <span>파주기 조절 (3s - 12s)</span>
+              <input type="range" id="custom-wave-period" min="3" max="12" step="0.5" value="7.5">
+              <span class="slider-val" id="custom-wave-period-val">7.5초</span>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button class="btn btn-secondary" id="settings-cancel-btn">취소</button>
+          <button class="btn btn-primary" id="settings-save-btn">적용하기</button>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- Custom JavaScript -->
+  <script src="app.js"></script>
+</body>
+</html>
