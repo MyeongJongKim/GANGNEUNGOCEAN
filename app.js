@@ -82,6 +82,77 @@ let waveSimulator = {
   period: 7.5  // seconds
 };
 
+// 1-1. LIVE DATA SOURCE CONFIG
+// Open-Meteo: 무료, API key 불필요, CORS 허용, 비상업용 무료.
+// Marine API는 0.08° 해상도라 5개 해변이 동일 해상 셀에 들어가므로
+// 파고/수온은 5개 해변이 같은 값을 공유한다 (라벨로 명시).
+const DATA_MODE = { SIMULATED: "simulated", API: "api" };
+const WEATHER_REFRESH_MS = 10 * 60 * 1000; // 10분 캐싱
+const MARINE_REFRESH_MS  = 30 * 60 * 1000; // 30분 캐싱
+const OPEN_METEO_BASE = "https://api.open-meteo.com/v1/forecast";
+const OPEN_METEO_MARINE_BASE = "https://marine-api.open-meteo.com/v1/marine";
+
+const BEACH_COORDS = {
+  gyeongpo:  { lat: 37.7956, lon: 128.9100, name: "경포해변" },
+  anmok:     { lat: 37.7744, lon: 128.9436, name: "안목해변" },
+  gangmun:   { lat: 37.7950, lon: 128.9210, name: "강문해변" },
+  jumunjin:  { lat: 37.8860, lon: 128.8220, name: "주문진해변" },
+  geumjin:   { lat: 37.7700, lon: 128.9650, name: "금진해변" }
+};
+
+// Open-Meteo WMO weather_code → 기존 skyCode/skyText 매핑
+// skyCode 값: clear | cloudy-sun | cloudy | rain (기존 아이콘 매핑 그대로 사용)
+const WMO_MAP = {
+  0:  { code: "clear",      text: "맑음" },
+  1:  { code: "clear",      text: "대체로 맑음" },
+  2:  { code: "cloudy-sun", text: "구름조금" },
+  3:  { code: "cloudy",     text: "흐림" },
+  45: { code: "cloudy",     text: "안개" },
+  48: { code: "cloudy",     text: "안개" },
+  51: { code: "rain",       text: "이슬비" },
+  53: { code: "rain",       text: "이슬비" },
+  55: { code: "rain",       text: "이슬비" },
+  56: { code: "rain",       text: "진눈깨비" },
+  57: { code: "rain",       text: "진눈깨비" },
+  61: { code: "rain",       text: "약한 비" },
+  63: { code: "rain",       text: "비" },
+  65: { code: "rain",       text: "강한 비" },
+  66: { code: "rain",       text: "진눈깨비" },
+  67: { code: "rain",       text: "진눈깨비" },
+  71: { code: "rain",       text: "약한 눈" },
+  73: { code: "rain",       text: "눈" },
+  75: { code: "rain",       text: "강한 눈" },
+  77: { code: "rain",       text: "눈알갱이" },
+  80: { code: "rain",       text: "소나기" },
+  81: { code: "rain",       text: "소나기" },
+  82: { code: "rain",       text: "강한 소나기" },
+  85: { code: "rain",       text: "눈" },
+  86: { code: "rain",       text: "강한 눈" },
+  95: { code: "rain",       text: "뇌우" },
+  96: { code: "rain",       text: "뇌우·우박" },
+  99: { code: "rain",       text: "뇌우·우박" }
+};
+
+let weatherCache = { data: null, expiresAt: 0 };
+let marineCache  = { data: null, expiresAt: 0 };
+let lastFetchError = null;
+
+// 푸터의 데이터 소스 라벨을 동적으로 갱신하는 헬퍼.
+// index.html의 footer p 태그에 id="data-source-status" 가 있으면 라벨을 갱신한다.
+function updateDataSourceLabel(ok) {
+  const el = document.getElementById("data-source-status");
+  if (!el) return;
+  const now = new Date();
+  const stamp = `${String(now.getHours()).padStart(2, "0")}:${String(now.getMinutes()).padStart(2, "0")}`;
+  if (ok) {
+    el.innerHTML = `🌊 실시간 데이터: <strong>Open-Meteo</strong> (Marine + Weather Forecast) · 마지막 갱신 ${stamp} KST`;
+    el.style.color = "";
+  } else {
+    el.innerHTML = `⚠️ 실시간 데이터 일시적 오류 · 마지막 갱신 ${stamp} KST · 자동 재시도 중`;
+    el.style.color = "#f59e0b";
+  }
+}
+
 // 2. DOM ELEMENTS
 const currentDatetimeEl = document.getElementById("current-datetime");
 const beachCardsContainer = document.getElementById("beach-cards");
@@ -550,77 +621,137 @@ function renderDashboardDetails() {
 
 function renderForecast() {
   const data = beachData[currentBeachKey];
-  
-  // 1) Hourly Forecast Generation (Mocked based on current stats)
+
+  const isApi = dataModeSelect && dataModeSelect.value === DATA_MODE.API;
+  const marine = isApi ? marineCache.data : null;
+  const weather = isApi ? weatherCache.data : null;
+
+  // 1) Hourly Forecast
   forecastHourlyContainer.innerHTML = "";
-  const baseTime = 9; // starting from 9:00 AM
-  
-  for (let i = 0; i < 8; i++) {
-    const time = (baseTime + i * 3) % 24;
-    const timeStr = `${time < 10 ? '0' + time : time}:00`;
-    
-    // Wave height varies slightly during the day
-    const wVar = Math.sin(i * 0.8) * 0.15;
-    const waveH = Math.max(0.1, data.waveHeight + wVar).toFixed(1);
-    
-    // Temperature variation
-    const tVar = Math.cos((time - 14) / 4) * 2; // peak temp around 14:00
-    const temp = (data.temp + tVar).toFixed(1);
 
-    // Weather icon variations
-    let weatherIcon = "fa-sun";
-    if (data.skyCode === "cloudy" || (i % 3 === 1)) {
-      weatherIcon = "fa-cloud-sun";
-    }
-    if (data.skyCode === "rain") {
-      weatherIcon = "fa-cloud-showers-heavy";
-    }
+  if (isApi && marine && weather && marine.hourly && weather.hourly) {
+    // Open-Meteo hourly에서 현재 시각 이후 8개 슬롯 (3시간 간격)
+    const tArr = weather.hourly.time;
+    const startIdx = pickCurrentIndex(tArr, weather.current?.time);
+    const stepHours = 3; // 3시간 간격
+    const slotsCount = 8;
 
-    const hourlyEl = document.createElement("div");
-    hourlyEl.className = "hourly-item";
-    hourlyEl.innerHTML = `
-      <span class="time">${timeStr}</span>
-      <i class="fa-solid ${weatherIcon} icon"></i>
-      <span class="temp">${temp}°C</span>
-      <span class="wave">${waveH}m</span>
-    `;
-    forecastHourlyContainer.appendChild(hourlyEl);
+    for (let k = 0; k < slotsCount; k++) {
+      const i = Math.min(startIdx + k * stepHours, tArr.length - 1);
+      const t = new Date(tArr[i]);
+      const timeStr = `${String(t.getHours()).padStart(2, "0")}:00`;
+
+      const temp = round1(weather.hourly.temperature_2m[i]);
+      const wmoCode = weather.hourly.weather_code[i];
+      const sky = WMO_MAP[wmoCode] || WMO_MAP[0];
+      const waveH = marine.hourly.wave_height ? round1(marine.hourly.wave_height[i]) : data.waveHeight;
+      const pop = weather.hourly.precipitation_probability ? weather.hourly.precipitation_probability[i] : 0;
+
+      let weatherIcon = "fa-sun";
+      if (sky.code === "cloudy-sun") weatherIcon = "fa-cloud-sun";
+      else if (sky.code === "cloudy") weatherIcon = "fa-cloud";
+      else if (sky.code === "rain") weatherIcon = "fa-cloud-showers-heavy";
+
+      const hourlyEl = document.createElement("div");
+      hourlyEl.className = "hourly-item";
+      hourlyEl.innerHTML = `
+        <span class="time">${timeStr}</span>
+        <i class="fa-solid ${weatherIcon} icon"></i>
+        <span class="temp">${temp}°C</span>
+        <span class="wave">${waveH}m</span>
+        ${pop >= 20 ? `<span class="pop" style="font-size:10px;opacity:0.7">💧${pop}%</span>` : ""}
+      `;
+      forecastHourlyContainer.appendChild(hourlyEl);
+    }
+  } else {
+    // 시뮬레이션 모드: 기존 mock 로직
+    const baseTime = 9;
+    for (let i = 0; i < 8; i++) {
+      const time = (baseTime + i * 3) % 24;
+      const timeStr = `${time < 10 ? '0' + time : time}:00`;
+
+      const wVar = Math.sin(i * 0.8) * 0.15;
+      const waveH = Math.max(0.1, data.waveHeight + wVar).toFixed(1);
+      const tVar = Math.cos((time - 14) / 4) * 2;
+      const temp = (data.temp + tVar).toFixed(1);
+
+      let weatherIcon = "fa-sun";
+      if (data.skyCode === "cloudy" || (i % 3 === 1)) weatherIcon = "fa-cloud-sun";
+      if (data.skyCode === "rain") weatherIcon = "fa-cloud-showers-heavy";
+
+      const hourlyEl = document.createElement("div");
+      hourlyEl.className = "hourly-item";
+      hourlyEl.innerHTML = `
+        <span class="time">${timeStr}</span>
+        <i class="fa-solid ${weatherIcon} icon"></i>
+        <span class="temp">${temp}°C</span>
+        <span class="wave">${waveH}m</span>
+      `;
+      forecastHourlyContainer.appendChild(hourlyEl);
+    }
   }
 
-  // 2) Weekly Forecast Generation
+  // 2) Weekly Forecast
   forecastWeeklyContainer.innerHTML = "";
-  const weekdays = ["월", "화", "수", "목", "금", "토", "일"];
-  const currentDayIndex = new Date().getDay(); // 0 is Sun, 1 is Mon etc.
-  
-  for (let i = 0; i < 5; i++) {
-    const dayName = weekdays[(currentDayIndex + i) % 7];
-    const waveH = Math.max(0.1, data.waveHeight + Math.sin(i * 1.5) * 0.3).toFixed(1);
-    
-    const minTemp = (data.temp - 4 + Math.cos(i) * 1).toFixed(0);
-    const maxTemp = (data.temp + 2 + Math.sin(i) * 1.5).toFixed(0);
+  const weekdays = ["일", "월", "화", "수", "목", "금", "토"];
 
-    let weatherIcon = "fa-sun";
-    let skyText = "맑음";
-    if (i === 2) {
-      weatherIcon = "fa-cloud-sun";
-      skyText = "구름조금";
-    } else if (i === 3) {
-      weatherIcon = "fa-cloud";
-      skyText = "흐림";
-    } else if (i === 4 && data.skyCode === "rain") {
-      weatherIcon = "fa-cloud-showers-heavy";
-      skyText = "비";
+  if (isApi && weather && weather.daily) {
+    // Open-Meteo daily는 forecast_days=5로 받은 데이터
+    const daily = weather.daily;
+    for (let i = 0; i < Math.min(5, (daily.time || []).length); i++) {
+      const day = new Date(daily.time[i]);
+      const dayName = i === 0 ? "오늘" : weekdays[day.getDay()] + "요일";
+      const minT = Math.round(daily.temperature_2m_min[i]);
+      const maxT = Math.round(daily.temperature_2m_max[i]);
+      const wmoCode = daily.weather_code ? daily.weather_code[i] : 0;
+      const sky = WMO_MAP[wmoCode] || WMO_MAP[0];
+      const waveH = (marine && marine.hourly && marine.hourly.wave_height && daily.time[i])
+        ? (() => {
+            const idx = pickCurrentIndex(marine.hourly.time, daily.time[i] + "T12:00");
+            return round1(marine.hourly.wave_height[idx]);
+          })()
+        : data.waveHeight;
+
+      let weatherIcon = "fa-sun";
+      if (sky.code === "cloudy-sun") weatherIcon = "fa-cloud-sun";
+      else if (sky.code === "cloudy") weatherIcon = "fa-cloud";
+      else if (sky.code === "rain") weatherIcon = "fa-cloud-showers-heavy";
+
+      const weeklyEl = document.createElement("div");
+      weeklyEl.className = "weekly-item";
+      weeklyEl.innerHTML = `
+        <span class="day">${dayName}</span>
+        <span class="weather"><i class="fa-solid ${weatherIcon}"></i> ${sky.text}</span>
+        <span class="temp-range"><span>${maxT}°</span> / ${minT}°</span>
+        <span class="wave">${waveH}m</span>
+      `;
+      forecastWeeklyContainer.appendChild(weeklyEl);
     }
+  } else {
+    // 시뮬레이션 모드
+    const currentDayIndex = new Date().getDay();
+    for (let i = 0; i < 5; i++) {
+      const dayName = weekdays[(currentDayIndex + i) % 7];
+      const waveH = Math.max(0.1, data.waveHeight + Math.sin(i * 1.5) * 0.3).toFixed(1);
+      const minTemp = (data.temp - 4 + Math.cos(i) * 1).toFixed(0);
+      const maxTemp = (data.temp + 2 + Math.sin(i) * 1.5).toFixed(0);
 
-    const weeklyEl = document.createElement("div");
-    weeklyEl.className = "weekly-item";
-    weeklyEl.innerHTML = `
-      <span class="day">${i === 0 ? '오늘' : dayName + '요일'}</span>
-      <span class="weather"><i class="fa-solid ${weatherIcon}"></i> ${skyText}</span>
-      <span class="temp-range"><span>${maxTemp}°</span> / ${minTemp}°</span>
-      <span class="wave">${waveH}m</span>
-    `;
-    forecastWeeklyContainer.appendChild(weeklyEl);
+      let weatherIcon = "fa-sun";
+      let skyText = "맑음";
+      if (i === 2) { weatherIcon = "fa-cloud-sun"; skyText = "구름조금"; }
+      else if (i === 3) { weatherIcon = "fa-cloud"; skyText = "흐림"; }
+      else if (i === 4 && data.skyCode === "rain") { weatherIcon = "fa-cloud-showers-heavy"; skyText = "비"; }
+
+      const weeklyEl = document.createElement("div");
+      weeklyEl.className = "weekly-item";
+      weeklyEl.innerHTML = `
+        <span class="day">${i === 0 ? '오늘' : dayName + '요일'}</span>
+        <span class="weather"><i class="fa-solid ${weatherIcon}"></i> ${skyText}</span>
+        <span class="temp-range"><span>${maxTemp}°</span> / ${minTemp}°</span>
+        <span class="wave">${waveH}m</span>
+      `;
+      forecastWeeklyContainer.appendChild(weeklyEl);
+    }
   }
 }
 
@@ -633,10 +764,10 @@ function startDataFluctuator() {
       const data = beachData[key];
       // Fluctuate temp by -0.1 to +0.1
       data.temp += (Math.random() - 0.5) * 0.2;
-      
+
       // Fluctuate wave height by -0.05 to +0.05
       data.waveHeight = Math.max(0.1, data.waveHeight + (Math.random() - 0.5) * 0.1);
-      
+
       // Keep within realistic decimal digits
       data.temp = parseFloat(data.temp.toFixed(1));
       data.waveHeight = parseFloat(data.waveHeight.toFixed(1));
@@ -652,6 +783,158 @@ function startDataFluctuator() {
     renderDashboardDetails();
     renderForecast();
   }, 4000);
+}
+
+// 6-1. LIVE DATA FROM OPEN-METEO (실시간 데이터 연동)
+// 풍향(deg) → 한글 16방위
+function vecToDirLabel(deg) {
+  if (deg == null || Number.isNaN(deg)) return "-";
+  const dirs = ["북", "북북동", "북동", "동북동",
+                "동", "동남동", "남동", "남남동",
+                "남", "남남서", "남서", "서남서",
+                "서", "서북서", "북서", "북북서"];
+  const idx = Math.round(((deg % 360) / 22.5)) % 16;
+  return dirs[idx];
+}
+
+function pickCurrentIndex(timeArr, nowIso) {
+  // 현재 시각과 가장 가까운 (또는 같은) 시간 인덱스 반환
+  if (!Array.isArray(timeArr) || timeArr.length === 0) return 0;
+  const nowMs = nowIso ? new Date(nowIso).getTime() : Date.now();
+  let bestIdx = 0;
+  let bestDiff = Math.abs(new Date(timeArr[0]).getTime() - nowMs);
+  for (let i = 1; i < timeArr.length; i++) {
+    const diff = Math.abs(new Date(timeArr[i]).getTime() - nowMs);
+    if (diff < bestDiff) { bestIdx = i; bestDiff = diff; }
+  }
+  return bestIdx;
+}
+
+function round1(n) { return Math.round(n * 10) / 10; }
+function round2(n) { return Math.round(n * 100) / 100; }
+
+async function fetchJson(url) {
+  const res = await fetch(url, { method: "GET" });
+  if (!res.ok) throw new Error(`HTTP ${res.status} on ${url}`);
+  return res.json();
+}
+
+async function fetchWeather(lat, lon) {
+  if (weatherCache.data && weatherCache.expiresAt > Date.now()) {
+    return weatherCache.data;
+  }
+  const url = `${OPEN_METEO_BASE}?latitude=${lat}&longitude=${lon}` +
+    `&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code` +
+    `&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code,precipitation_probability` +
+    `&daily=weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max` +
+    `&wind_speed_unit=ms` + // m/s 단위 (기본 km/h)
+    `&timezone=Asia%2FSeoul&forecast_days=5`;
+  const data = await fetchJson(url);
+  weatherCache = { data, expiresAt: Date.now() + WEATHER_REFRESH_MS };
+  return data;
+}
+
+async function fetchMarine(lat, lon) {
+  if (marineCache.data && marineCache.expiresAt > Date.now()) {
+    return marineCache.data;
+  }
+  const url = `${OPEN_METEO_MARINE_BASE}?latitude=${lat}&longitude=${lon}` +
+    `&current=wave_height,wave_period,wave_direction,sea_surface_temperature` +
+    `&hourly=wave_height,wave_period,wave_direction,sea_surface_temperature` +
+    `&timezone=Asia%2FSeoul&forecast_days=3`;
+  const data = await fetchJson(url);
+  marineCache = { data, expiresAt: Date.now() + MARINE_REFRESH_MS };
+  return data;
+}
+
+// 5개 좌표(또는 첫 번째) 평균을 대표 marine으로 사용한다.
+// Open-Meteo Marine은 0.08° 해상도라 사실상 같은 값이지만, 키 별로 호출해
+// 같은 값을 받아오는 비용을 줄이기 위해 강릉 중심 좌표(37.79, 128.92)로 1회만 호출.
+const MARINE_REPRESENTATIVE = { lat: 37.79, lon: 128.92 };
+
+async function refreshAllBeaches() {
+  if (dataModeSelect && dataModeSelect.value !== DATA_MODE.API) return;
+
+  const updated = [];
+  const errors = [];
+
+  // Weather는 5개 좌표 모두 (육상 풍향/기온은 해변별로 다름)
+  await Promise.all(
+    Object.keys(BEACH_COORDS).map(async (key) => {
+      const { lat, lon } = BEACH_COORDS[key];
+      try {
+        const w = await fetchWeather(lat, lon);
+        const idx = pickCurrentIndex(w.hourly?.time, w.current?.time);
+        const cur = w.current || {};
+        const sky = WMO_MAP[cur.weather_code] || WMO_MAP[0];
+        // Open-Meteo의 풍속은 m/s. 풍향은 degree.
+        const data = {
+          skyCode: sky.code,
+          skyText: sky.text,
+          temp: round1(cur.temperature_2m ?? w.hourly.temperature_2m[idx]),
+          windDir: vecToDirLabel(cur.wind_direction_10m ?? w.hourly.wind_direction_10m[idx]),
+          windSpeed: round1(cur.wind_speed_10m ?? w.hourly.wind_speed_10m[idx]),
+          humidity: Math.round(cur.relative_humidity_2m ?? w.hourly.relative_humidity_2m[idx] ?? 0)
+        };
+        updated.push({ key, data });
+      } catch (err) {
+        errors.push({ key, type: "weather", err });
+      }
+    })
+  );
+
+  // Marine은 1회 (해상 광역 데이터, 5개 해변이 동일 값)
+  let marine = null;
+  try {
+    marine = await fetchMarine(MARINE_REPRESENTATIVE.lat, MARINE_REPRESENTATIVE.lon);
+    const mCur = marine.current || {};
+    const waveH = round1(mCur.wave_height ?? 0);
+    const waveP = round1(mCur.wave_period ?? 0);
+    const sst   = mCur.sea_surface_temperature != null ? round1(mCur.sea_surface_temperature) : null;
+    Object.keys(BEACH_COORDS).forEach((key) => {
+      const existing = updated.find((u) => u.key === key);
+      const target = existing || { key, data: {} };
+      target.data = {
+        ...target.data,
+        waveHeight: waveH,
+        wavePeriod: waveP,
+        waterTemp: sst != null ? sst : (beachData[key].waterTemp ?? 0)
+      };
+      if (!existing) updated.push(target);
+    });
+  } catch (err) {
+    errors.push({ type: "marine", err });
+  }
+
+  updated.forEach(({ key, data }) => {
+    beachData[key] = { ...beachData[key], ...data };
+  });
+
+  // 현재 선택된 해변이면 파도 시뮬레이터 동기화
+  const cur = beachData[currentBeachKey];
+  if (cur) {
+    waveSimulator.height = cur.waveHeight;
+    waveSimulator.period = cur.wavePeriod;
+    if (customWaveHeight) {
+      customWaveHeight.value = cur.waveHeight;
+      customWaveHeightVal.textContent = `${cur.waveHeight}m`;
+    }
+    if (customWavePeriod) {
+      customWavePeriod.value = cur.wavePeriod;
+      customWavePeriodVal.textContent = `${cur.wavePeriod}초`;
+    }
+  }
+
+  // 화면 갱신
+  renderBeachCards();
+  renderDashboardDetails();
+  renderForecast();
+
+  // 푸터/상태 표시 (있을 때만)
+  if (typeof updateDataSourceLabel === "function") updateDataSourceLabel(errors.length === 0);
+
+  lastFetchError = errors.length ? errors : null;
+  return { updated: updated.length, errors: errors.length };
 }
 
 // 7. TIME & CLOCK
@@ -721,7 +1004,10 @@ function setupEventListeners() {
       apiInputsWrap.classList.remove("disabled");
     } else {
       apiInputsWrap.classList.add("disabled");
+      // 시뮬레이션 모드 복귀 시 live loop 정지
+      stopLiveRefreshLoop();
     }
+    try { localStorage.setItem("gangneung-ocean-data-mode", e.target.value); } catch {}
   });
 
   // Manual wave customization slider changes
@@ -749,46 +1035,78 @@ function setupEventListeners() {
   });
 
   // Apply button inside settings modal
-  settingsSaveBtn.addEventListener("click", () => {
+  settingsSaveBtn.addEventListener("click", async () => {
     const isApiMode = dataModeSelect.value === "api";
-    
+
     if (isApiMode) {
-      const openWeatherKey = document.getElementById("openweathermap-api-key").value.trim();
-      const khoaKey = document.getElementById("khoa-api-key").value.trim();
-      
-      if (!openWeatherKey || !khoaKey) {
-        alert("외부 API 연동을 위해 모든 API Key를 올바르게 입력해주세요. 현재는 임시로 시뮬레이션 모드를 사용합니다.");
-        dataModeSelect.value = "simulated";
-        apiInputsWrap.classList.add("disabled");
+      // 입력란은 호환을 위해 유지하지만, 현재는 Open-Meteo(API key 불필요)로 자동 연동한다.
+      // (해상 광역 데이터 + Open-Meteo 무료 CORS)
+      closeModal();
+      // 즉시 fetch + 이후 주기적 갱신 시작
+      const result = await refreshAllBeaches();
+      startLiveRefreshLoop();
+      if (typeof showDataSourceToast === "function") {
+        showDataSourceToast(result && result.errors === 0
+          ? "✅ Open-Meteo 실시간 데이터 연동 시작"
+          : "⚠️ 일부 데이터 fetch 실패, 다시 시도합니다");
       } else {
-        alert("API 연동 설정이 정상 저장되었습니다. (입력하신 키로 모사 연동 시작)");
+        alert(result && result.errors === 0
+          ? "Open-Meteo 실시간 연동이 시작되었습니다."
+          : "Open-Meteo 호출 중 일부 오류가 발생했습니다. 잠시 후 자동 재시도합니다.");
       }
     } else {
       // simulated mode - refresh based on active sliders
+      stopLiveRefreshLoop();
       beachData[currentBeachKey].waveHeight = waveSimulator.height;
       beachData[currentBeachKey].wavePeriod = waveSimulator.period;
       renderBeachCards();
       renderDashboardDetails();
       renderForecast();
+      closeModal();
     }
-    
-    closeModal();
   });
+}
+
+// 8-1. LIVE REFRESH LOOP CONTROL
+let liveRefreshTimer = null;
+function startLiveRefreshLoop() {
+  stopLiveRefreshLoop();
+  liveRefreshTimer = setInterval(() => {
+    refreshAllBeaches();
+  }, WEATHER_REFRESH_MS);
+}
+function stopLiveRefreshLoop() {
+  if (liveRefreshTimer) {
+    clearInterval(liveRefreshTimer);
+    liveRefreshTimer = null;
+  }
 }
 
 // 9. APP INITIALIZATION
 document.addEventListener("DOMContentLoaded", () => {
   startClock();
   initCanvas();
-  
+
   // Set default beach
   selectBeach("gyeongpo");
-  
+
   setupEventListeners();
-  
+
   // Start canvas loop
   drawWaveSimulator();
-  
-  // Start simulation fluctuation
+
+  // Start simulation fluctuation (only meaningful in simulated mode)
   startDataFluctuator();
+
+  // 기본값은 시뮬레이션 모드 (사용자가 모달에서 "API"로 전환 시 실시간 연동 시작)
+  // 사용자가 모드 변경 후 새로고침해도 유지되도록 localStorage에 저장
+  const savedMode = (() => {
+    try { return localStorage.getItem("gangneung-ocean-data-mode"); } catch { return null; }
+  })();
+  if (savedMode === DATA_MODE.API && dataModeSelect) {
+    dataModeSelect.value = DATA_MODE.API;
+    apiInputsWrap.classList.remove("disabled");
+    // 자동 fetch 시작 (에러나도 사용자에게 alert만 안 띄움)
+    refreshAllBeaches().then(() => startLiveRefreshLoop());
+  }
 });

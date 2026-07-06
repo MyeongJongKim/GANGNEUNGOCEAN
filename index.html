@@ -224,8 +224,9 @@
 
     <!-- Footer -->
     <footer class="app-footer">
-      <p>&copy; 2026 GANGNEUNG OCEAN CASTER. Data simulated for evaluation.</p>
-      <p>본 서비스는 실시간 기상/해양 빅데이터를 시뮬레이션하여 서핑 및 해변 활동을 지원합니다.</p>
+      <p id="data-source-status">🌊 실시간 데이터: <strong>시뮬레이션 모드</strong> · 설정에서 API 모드로 전환하세요</p>
+      <p>&copy; 2026 GANGNEUNG OCEAN CASTER. 시뮬레이션 / Open-Meteo 기반 실시간 데이터.</p>
+      <p>본 서비스는 서핑 및 해변 활동을 위한 정보 제공 목적이며, 실제 기상/해양 경보와 다를 수 있습니다.</p>
     </footer>
 
     <!-- Settings Modal (API Key input and Data Customization) -->
@@ -236,26 +237,27 @@
           <button class="close-btn" id="settings-close-btn" aria-label="닫기">&times;</button>
         </div>
         <div class="modal-body">
-          <p class="settings-intro">현재 본 대시보드는 정밀하게 튜닝된 <strong>강릉 해변 맞춤형 시뮬레이션 모드</strong>로 작동 중입니다. 기상청 API 및 OpenWeatherMap API와 동기화하려면 정보를 입력하세요.</p>
-          
+          <p class="settings-intro">데이터 모드를 선택하세요. <strong>실시간 외부 API 동기화 모드</strong>는 무료·API key 불필요·CORS 호환인 <strong>Open-Meteo</strong>(기상 예보 + 해양 파고)를 사용합니다. 시뮬레이션 모드는 데모/테스트용입니다.</p>
+
           <div class="setting-group">
             <label for="data-mode-select">데이터 모드</label>
             <select id="data-mode-select">
-              <option value="simulated">강릉 바다 실시간 시뮬레이션 (추천)</option>
-              <option value="api">실시간 외부 API 동기화 모드</option>
+              <option value="simulated">시뮬레이션 모드 (기본, 데모용)</option>
+              <option value="api">실시간 외부 API 동기화 (Open-Meteo)</option>
             </select>
           </div>
 
           <div class="api-inputs-wrap disabled" id="api-inputs-wrap">
+            <p class="settings-intro" style="opacity:0.7;font-size:12px;margin-bottom:12px">ℹ️ Open-Meteo는 API key가 필요 없습니다. 아래 입력란은 추후 다른 데이터 소스(공공데이터/해양관측 등)로 확장할 때 사용할 수 있도록 보존되어 있습니다.</p>
             <div class="setting-group">
-              <label for="openweathermap-api-key">OpenWeatherMap API Key</label>
+              <label for="openweathermap-api-key">OpenWeatherMap API Key (선택, 미사용)</label>
               <input type="password" id="openweathermap-api-key" placeholder="API Key를 입력하세요">
-              <small>해변의 실시간 날씨, 기온, 습도 정보를 가져옵니다.</small>
+              <small>현재는 Open-Meteo만 사용 중입니다. 추후 보조 데이터로 활용 예정.</small>
             </div>
             <div class="setting-group">
-              <label for="khoa-api-key">국립해양조사원 바다누리 API Key</label>
+              <label for="khoa-api-key">국립해양조사원 바다누리 API Key (선택, 미사용)</label>
               <input type="password" id="khoa-api-key" placeholder="API Key를 입력하세요">
-              <small>동해 관측소의 실시간 조석 및 파고 데이터를 연동합니다.</small>
+              <small>현재는 Open-Meteo Marine API만 사용 중입니다.</small>
             </div>
           </div>
           
