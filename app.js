@@ -86,7 +86,9 @@ let waveSimulator = {
 // Open-Meteo: 무료, API key 불필요, CORS 허용, 비상업용 무료.
 // Marine API는 0.08° 해상도라 5개 해변이 동일 해상 셀에 들어가므로
 // 파고/수온은 5개 해변이 같은 값을 공유한다 (라벨로 명시).
-const DATA_MODE = { SIMULATED: "simulated", API: "api" };
+//
+// 페이지 로드 시 자동으로 Open-Meteo에 연동하며, 더 이상 사용자가 모드를
+// 선택할 필요가 없다 (시뮬레이션 모드는 더 이상 노출하지 않음).
 const WEATHER_REFRESH_MS = 10 * 60 * 1000; // 10분 캐싱
 const MARINE_REFRESH_MS  = 30 * 60 * 1000; // 30분 캐싱
 const OPEN_METEO_BASE = "https://api.open-meteo.com/v1/forecast";
@@ -186,8 +188,6 @@ const settingsCloseBtn = document.getElementById("settings-close-btn");
 const settingsCancelBtn = document.getElementById("settings-cancel-btn");
 const settingsSaveBtn = document.getElementById("settings-save-btn");
 const settingsModal = document.getElementById("settings-modal");
-const dataModeSelect = document.getElementById("data-mode-select");
-const apiInputsWrap = document.getElementById("api-inputs-wrap");
 
 const customWaveHeight = document.getElementById("custom-wave-height");
 const customWaveHeightVal = document.getElementById("custom-wave-height-val");
@@ -622,14 +622,15 @@ function renderDashboardDetails() {
 function renderForecast() {
   const data = beachData[currentBeachKey];
 
-  const isApi = dataModeSelect && dataModeSelect.value === DATA_MODE.API;
-  const marine = isApi ? marineCache.data : null;
-  const weather = isApi ? weatherCache.data : null;
+  // 페이지 로드 시 자동으로 Open-Meteo에 연동되므로,
+  // 시뮬레이션 분기 없이 항상 캐시된 API 데이터로 렌더링한다.
+  const marine = marineCache.data;
+  const weather = weatherCache.data;
 
   // 1) Hourly Forecast
   forecastHourlyContainer.innerHTML = "";
 
-  if (isApi && marine && weather && marine.hourly && weather.hourly) {
+  if (marine && weather && marine.hourly && weather.hourly) {
     // Open-Meteo hourly에서 현재 시각 이후 8개 슬롯 (3시간 간격)
     const tArr = weather.hourly.time;
     const startIdx = pickCurrentIndex(tArr, weather.current?.time);
@@ -695,7 +696,7 @@ function renderForecast() {
   forecastWeeklyContainer.innerHTML = "";
   const weekdays = ["일", "월", "화", "수", "목", "금", "토"];
 
-  if (isApi && weather && weather.daily) {
+  if (weather && weather.daily) {
     // Open-Meteo daily는 forecast_days=5로 받은 데이터
     const daily = weather.daily;
     for (let i = 0; i < Math.min(5, (daily.time || []).length); i++) {
@@ -755,35 +756,8 @@ function renderForecast() {
   }
 }
 
-// 6. LIVE DATA SIMULATOR FLUCTUATION (Updates data slightly every 4 seconds)
-function startDataFluctuator() {
-  setInterval(() => {
-    if (dataModeSelect.value !== "simulated") return;
-
-    Object.keys(beachData).forEach(key => {
-      const data = beachData[key];
-      // Fluctuate temp by -0.1 to +0.1
-      data.temp += (Math.random() - 0.5) * 0.2;
-
-      // Fluctuate wave height by -0.05 to +0.05
-      data.waveHeight = Math.max(0.1, data.waveHeight + (Math.random() - 0.5) * 0.1);
-
-      // Keep within realistic decimal digits
-      data.temp = parseFloat(data.temp.toFixed(1));
-      data.waveHeight = parseFloat(data.waveHeight.toFixed(1));
-    });
-
-    // Update simulation parameters based on active beach
-    const currentData = beachData[currentBeachKey];
-    waveSimulator.height = currentData.waveHeight;
-    waveSimulator.period = currentData.wavePeriod;
-
-    // Refresh display
-    renderBeachCards();
-    renderDashboardDetails();
-    renderForecast();
-  }, 4000);
-}
+// 6. (제거됨) 시뮬레이션 4초 fluctuate 로직은 더 이상 사용하지 않음.
+// Open-Meteo 실시간 데이터가 페이지 로드 시 자동으로 fetch된다.
 
 // 6-1. LIVE DATA FROM OPEN-METEO (실시간 데이터 연동)
 // 풍향(deg) → 한글 16방위
@@ -853,8 +827,6 @@ async function fetchMarine(lat, lon) {
 const MARINE_REPRESENTATIVE = { lat: 37.79, lon: 128.92 };
 
 async function refreshAllBeaches() {
-  if (dataModeSelect && dataModeSelect.value !== DATA_MODE.API) return;
-
   const updated = [];
   const errors = [];
 
@@ -998,29 +970,19 @@ function setupEventListeners() {
     if (e.target === settingsModal) closeModal();
   });
 
-  // API mode switch
-  dataModeSelect.addEventListener("change", (e) => {
-    if (e.target.value === "api") {
-      apiInputsWrap.classList.remove("disabled");
-    } else {
-      apiInputsWrap.classList.add("disabled");
-      // 시뮬레이션 모드 복귀 시 live loop 정지
-      stopLiveRefreshLoop();
-    }
-    try { localStorage.setItem("gangneung-ocean-data-mode", e.target.value); } catch {}
-  });
-
-  // Manual wave customization slider changes
+  // 수동 파도 커스터마이징 슬라이더 변경
   customWaveHeight.addEventListener("input", (e) => {
     const val = parseFloat(e.target.value);
     customWaveHeightVal.textContent = `${val}m`;
     waveSimulator.height = val;
     overlayWaveHeight.textContent = `${val}m`;
-    
-    // dynamically recalculate scores in real-time
+
+    // 점수만 실시간 재계산 (실제 데이터는 슬라이더로 덮어쓰지 않음)
     const currentData = beachData[currentBeachKey];
-    currentData.waveHeight = val; // temporarily apply to state
+    const prevH = currentData.waveHeight;
+    currentData.waveHeight = val; // 일시 적용
     renderDashboardDetails();
+    currentData.waveHeight = prevH; // 원복
   });
 
   customWavePeriod.addEventListener("input", (e) => {
@@ -1028,41 +990,26 @@ function setupEventListeners() {
     customWavePeriodVal.textContent = `${val}초`;
     waveSimulator.period = val;
     overlayWavePeriod.textContent = `${val}s`;
-    
+
     const currentData = beachData[currentBeachKey];
-    currentData.wavePeriod = val; // temporarily apply to state
+    const prevP = currentData.wavePeriod;
+    currentData.wavePeriod = val;
     renderDashboardDetails();
+    currentData.wavePeriod = prevP;
   });
 
-  // Apply button inside settings modal
+  // 적용 버튼: Open-Meteo 수동 새로고침 + 푸터 갱신
   settingsSaveBtn.addEventListener("click", async () => {
-    const isApiMode = dataModeSelect.value === "api";
-
-    if (isApiMode) {
-      // 입력란은 호환을 위해 유지하지만, 현재는 Open-Meteo(API key 불필요)로 자동 연동한다.
-      // (해상 광역 데이터 + Open-Meteo 무료 CORS)
-      closeModal();
-      // 즉시 fetch + 이후 주기적 갱신 시작
-      const result = await refreshAllBeaches();
-      startLiveRefreshLoop();
-      if (typeof showDataSourceToast === "function") {
-        showDataSourceToast(result && result.errors === 0
-          ? "✅ Open-Meteo 실시간 데이터 연동 시작"
-          : "⚠️ 일부 데이터 fetch 실패, 다시 시도합니다");
-      } else {
-        alert(result && result.errors === 0
-          ? "Open-Meteo 실시간 연동이 시작되었습니다."
-          : "Open-Meteo 호출 중 일부 오류가 발생했습니다. 잠시 후 자동 재시도합니다.");
-      }
+    closeModal();
+    const result = await refreshAllBeaches();
+    if (typeof showDataSourceToast === "function") {
+      showDataSourceToast(result && result.errors === 0
+        ? "✅ Open-Meteo 데이터 새로고침 완료"
+        : "⚠️ 일부 데이터 fetch 실패, 자동 재시도 중");
     } else {
-      // simulated mode - refresh based on active sliders
-      stopLiveRefreshLoop();
-      beachData[currentBeachKey].waveHeight = waveSimulator.height;
-      beachData[currentBeachKey].wavePeriod = waveSimulator.period;
-      renderBeachCards();
-      renderDashboardDetails();
-      renderForecast();
-      closeModal();
+      alert(result && result.errors === 0
+        ? "Open-Meteo 데이터가 새로고침되었습니다."
+        : "Open-Meteo 호출 중 일부 오류가 발생했습니다. 잠시 후 자동 재시도합니다.");
     }
   });
 }
@@ -1087,7 +1034,7 @@ document.addEventListener("DOMContentLoaded", () => {
   startClock();
   initCanvas();
 
-  // Set default beach
+  // Set default beach (초기 mock 데이터로 먼저 렌더)
   selectBeach("gyeongpo");
 
   setupEventListeners();
@@ -1095,18 +1042,7 @@ document.addEventListener("DOMContentLoaded", () => {
   // Start canvas loop
   drawWaveSimulator();
 
-  // Start simulation fluctuation (only meaningful in simulated mode)
-  startDataFluctuator();
-
-  // 기본값은 시뮬레이션 모드 (사용자가 모달에서 "API"로 전환 시 실시간 연동 시작)
-  // 사용자가 모드 변경 후 새로고침해도 유지되도록 localStorage에 저장
-  const savedMode = (() => {
-    try { return localStorage.getItem("gangneung-ocean-data-mode"); } catch { return null; }
-  })();
-  if (savedMode === DATA_MODE.API && dataModeSelect) {
-    dataModeSelect.value = DATA_MODE.API;
-    apiInputsWrap.classList.remove("disabled");
-    // 자동 fetch 시작 (에러나도 사용자에게 alert만 안 띄움)
-    refreshAllBeaches().then(() => startLiveRefreshLoop());
-  }
+  // 페이지 로드 시 자동으로 Open-Meteo 실시간 데이터 연동 시작.
+  // (사용자 모드 선택 불필요 — API key도 불필요)
+  refreshAllBeaches().then(() => startLiveRefreshLoop());
 });
