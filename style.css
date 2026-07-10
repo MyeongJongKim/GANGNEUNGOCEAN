@@ -1097,3 +1097,34 @@ body {
     width: 100%;
   }
 }
+
+/* ==========================================
+   LOADING STATES (실데이터 도착 전 표시)
+   ========================================== */
+.val-loading {
+  opacity: 0.55;
+  animation: loading-pulse 1.4s ease-in-out infinite;
+}
+
+.status-badge.loading,
+.alert-chip.loading {
+  background: rgba(148, 163, 184, 0.15);
+  color: #94a3b8;
+  animation: loading-pulse 1.4s ease-in-out infinite;
+}
+
+.forecast-loading {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 2rem 0;
+  font-size: 0.85rem;
+  color: #94a3b8;
+  animation: loading-pulse 1.4s ease-in-out infinite;
+}
+
+@keyframes loading-pulse {
+  50% { opacity: 0.35; }
+}

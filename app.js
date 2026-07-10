@@ -3,6 +3,9 @@
    ========================================== */
 
 // 1. DATA STATE
+// 아래 초기값은 화면에 표시되지 않는 내부 시드값이다 (파도 시뮬레이터
+// 애니메이션 구동용). 실제 수치는 Open-Meteo 응답이 도착해 liveWeather /
+// liveMarine 플래그가 켜진 뒤에만 표시되며, 그 전에는 로딩 표시(--)를 그린다.
 const beachData = {
   gyeongpo: {
     name: "경포해변",
@@ -568,8 +571,16 @@ function renderAlerts() {
   const bar = document.getElementById("weather-alert-bar");
   if (!bar) return;
   const data = beachData[currentBeachKey];
-  const alerts = computeBeachAlerts(data);
   const note = `<span class="alert-note">Open-Meteo 실황 기반 자동 판정 · 공식 특보는 기상청 확인</span>`;
+
+  // 실데이터 도착 전에는 특보를 판정하지 않는다 (시드값 기반 오판 방지)
+  if (!(data.liveWeather && data.liveMarine)) {
+    bar.innerHTML =
+      `<span class="alert-chip loading"><i class="fa-solid fa-satellite-dish"></i> 실시간 데이터 수신 중…</span>` + note;
+    return;
+  }
+
+  const alerts = computeBeachAlerts(data);
 
   if (alerts.length === 0) {
     bar.innerHTML =
@@ -596,12 +607,17 @@ function renderBeachCards() {
     if (data.skyCode === "rain") iconClass = "fa-cloud-showers-heavy";
 
     // 특보 수준 기상이면 카드에 경고 배지 표시 (경보 > 주의보 우선)
-    const alerts = computeBeachAlerts(data);
+    // 실데이터 도착 전에는 판정하지 않는다 (시드값 기반 오판 방지)
+    const isLive = data.liveWeather && data.liveMarine;
+    const alerts = isLive ? computeBeachAlerts(data) : [];
     const alertLevel = alerts.some((a) => a.level === "warning")
       ? "warning" : (alerts.length ? "watch" : null);
     const alertBadge = alertLevel
       ? `<span class="beach-alert-badge ${alertLevel}" title="${alerts.map((a) => a.label).join(", ")}"><i class="fa-solid fa-triangle-exclamation"></i></span>`
       : "";
+    const waveDisplay = data.liveMarine
+      ? `${data.waveHeight}m`
+      : `<span class="val-loading">--</span>`;
 
     const card = document.createElement("div");
     card.className = `beach-card ${isActive ? 'active' : ''}`;
@@ -614,7 +630,7 @@ function renderBeachCards() {
       </div>
       <div class="beach-card-stat">
         <span class="label">유의파고</span>
-        <span class="value">${data.waveHeight}m</span>
+        <span class="value">${waveDisplay}</span>
       </div>
       <div class="beach-card-weather-icon">
         <i class="fa-solid ${iconClass}"></i>
@@ -653,38 +669,57 @@ function selectBeach(key) {
 
 function renderDashboardDetails() {
   const data = beachData[currentBeachKey];
+  const liveW = !!data.liveWeather;
+  const liveM = !!data.liveMarine;
 
   selectedBeachNameEl.textContent = data.name;
-  mainTempEl.textContent = `${data.temp.toFixed(1)}°C`;
-  
-  let skyIcon = '<i class="fa-solid fa-cloud-sun"></i>';
-  if (data.skyCode === "clear") skyIcon = '<i class="fa-solid fa-sun-rising"></i>';
-  if (data.skyCode === "cloudy") skyIcon = '<i class="fa-solid fa-cloud"></i>';
-  if (data.skyCode === "rain") skyIcon = '<i class="fa-solid fa-cloud-rain"></i>';
-  mainSkyEl.innerHTML = `${skyIcon} ${data.skyText}`;
+  mainTempEl.textContent = liveW ? `${data.temp.toFixed(1)}°C` : "--°C";
 
-  valWindEl.textContent = `${data.windDir} ${data.windSpeed}m/s`;
-  valWaveHeightEl.textContent = `${data.waveHeight}m`;
-  valWavePeriodEl.textContent = `${data.wavePeriod}초`;
-  valWaterTempEl.textContent = `${data.waterTemp}°C`;
-  valHumidityEl.textContent = `${data.humidity}%`;
+  if (liveW) {
+    let skyIcon = '<i class="fa-solid fa-cloud-sun"></i>';
+    if (data.skyCode === "clear") skyIcon = '<i class="fa-solid fa-sun-rising"></i>';
+    if (data.skyCode === "cloudy") skyIcon = '<i class="fa-solid fa-cloud"></i>';
+    if (data.skyCode === "rain") skyIcon = '<i class="fa-solid fa-cloud-rain"></i>';
+    mainSkyEl.innerHTML = `${skyIcon} ${data.skyText}`;
+  } else {
+    mainSkyEl.innerHTML = `<i class="fa-solid fa-satellite-dish"></i> <span class="val-loading">수신 중…</span>`;
+  }
+
+  valWindEl.textContent = liveW ? `${data.windDir} ${data.windSpeed}m/s` : "--";
+  valWaveHeightEl.textContent = liveM ? `${data.waveHeight}m` : "--";
+  valWavePeriodEl.textContent = liveM ? `${data.wavePeriod}초` : "--";
+  valWaterTempEl.textContent = liveM ? `${data.waterTemp}°C` : "--";
+  valHumidityEl.textContent = liveW ? `${data.humidity}%` : "--";
   valTideEl.textContent = data.tide;
 
-  overlayWaveHeight.textContent = `${data.waveHeight}m`;
-  overlayWavePeriod.textContent = `${data.wavePeriod}s`;
+  overlayWaveHeight.textContent = liveM ? `${data.waveHeight}m` : "--";
+  overlayWavePeriod.textContent = liveM ? `${data.wavePeriod}s` : "--";
 
   // Activity calculation & update
-  const surfResult = calculateSurfIndex(data.waveHeight, data.wavePeriod, data.windSpeed);
-  surfScoreEl.textContent = surfResult.score;
-  surfBadge.textContent = surfResult.grade;
-  surfBadge.className = `status-badge ${surfResult.badgeClass}`;
-  surfDesc.textContent = surfResult.desc;
+  // 실데이터가 모두 도착하기 전에는 시드값 기반 점수를 보여주지 않는다.
+  if (liveW && liveM) {
+    const surfResult = calculateSurfIndex(data.waveHeight, data.wavePeriod, data.windSpeed);
+    surfScoreEl.textContent = surfResult.score;
+    surfBadge.textContent = surfResult.grade;
+    surfBadge.className = `status-badge ${surfResult.badgeClass}`;
+    surfDesc.textContent = surfResult.desc;
 
-  const swimResult = calculateSwimIndex(data.waveHeight, data.waterTemp, data.windSpeed);
-  swimScoreEl.textContent = swimResult.score;
-  swimBadge.textContent = swimResult.grade;
-  swimBadge.className = `status-badge ${swimResult.badgeClass}`;
-  swimDesc.textContent = swimResult.desc;
+    const swimResult = calculateSwimIndex(data.waveHeight, data.waterTemp, data.windSpeed);
+    swimScoreEl.textContent = swimResult.score;
+    swimBadge.textContent = swimResult.grade;
+    swimBadge.className = `status-badge ${swimResult.badgeClass}`;
+    swimDesc.textContent = swimResult.desc;
+  } else {
+    surfScoreEl.textContent = "--";
+    surfBadge.textContent = "수신 중";
+    surfBadge.className = "status-badge loading";
+    surfDesc.textContent = "실시간 데이터를 불러오는 중입니다…";
+
+    swimScoreEl.textContent = "--";
+    swimBadge.textContent = "수신 중";
+    swimBadge.className = "status-badge loading";
+    swimDesc.textContent = "실시간 데이터를 불러오는 중입니다…";
+  }
 
   renderAlerts();
 }
@@ -736,31 +771,9 @@ function renderForecast() {
       forecastHourlyContainer.appendChild(hourlyEl);
     }
   } else {
-    // 시뮬레이션 모드: 기존 mock 로직
-    const baseTime = 9;
-    for (let i = 0; i < 8; i++) {
-      const time = (baseTime + i * 3) % 24;
-      const timeStr = `${time < 10 ? '0' + time : time}:00`;
-
-      const wVar = Math.sin(i * 0.8) * 0.15;
-      const waveH = Math.max(0.1, data.waveHeight + wVar).toFixed(1);
-      const tVar = Math.cos((time - 14) / 4) * 2;
-      const temp = (data.temp + tVar).toFixed(1);
-
-      let weatherIcon = "fa-sun";
-      if (data.skyCode === "cloudy" || (i % 3 === 1)) weatherIcon = "fa-cloud-sun";
-      if (data.skyCode === "rain") weatherIcon = "fa-cloud-showers-heavy";
-
-      const hourlyEl = document.createElement("div");
-      hourlyEl.className = "hourly-item";
-      hourlyEl.innerHTML = `
-        <span class="time">${timeStr}</span>
-        <i class="fa-solid ${weatherIcon} icon"></i>
-        <span class="temp">${temp}°C</span>
-        <span class="wave">${waveH}m</span>
-      `;
-      forecastHourlyContainer.appendChild(hourlyEl);
-    }
+    // 실데이터 도착 전: 가짜 예보 대신 로딩 표시
+    forecastHourlyContainer.innerHTML =
+      `<div class="forecast-loading"><i class="fa-solid fa-satellite-dish"></i> 실시간 예보 불러오는 중…</div>`;
   }
 
   // 2) Weekly Forecast
@@ -800,30 +813,9 @@ function renderForecast() {
       forecastWeeklyContainer.appendChild(weeklyEl);
     }
   } else {
-    // 시뮬레이션 모드
-    const currentDayIndex = new Date().getDay();
-    for (let i = 0; i < 5; i++) {
-      const dayName = weekdays[(currentDayIndex + i) % 7];
-      const waveH = Math.max(0.1, data.waveHeight + Math.sin(i * 1.5) * 0.3).toFixed(1);
-      const minTemp = (data.temp - 4 + Math.cos(i) * 1).toFixed(0);
-      const maxTemp = (data.temp + 2 + Math.sin(i) * 1.5).toFixed(0);
-
-      let weatherIcon = "fa-sun";
-      let skyText = "맑음";
-      if (i === 2) { weatherIcon = "fa-cloud-sun"; skyText = "구름조금"; }
-      else if (i === 3) { weatherIcon = "fa-cloud"; skyText = "흐림"; }
-      else if (i === 4 && data.skyCode === "rain") { weatherIcon = "fa-cloud-showers-heavy"; skyText = "비"; }
-
-      const weeklyEl = document.createElement("div");
-      weeklyEl.className = "weekly-item";
-      weeklyEl.innerHTML = `
-        <span class="day">${i === 0 ? '오늘' : dayName + '요일'}</span>
-        <span class="weather"><i class="fa-solid ${weatherIcon}"></i> ${skyText}</span>
-        <span class="temp-range"><span>${maxTemp}°</span> / ${minTemp}°</span>
-        <span class="wave">${waveH}m</span>
-      `;
-      forecastWeeklyContainer.appendChild(weeklyEl);
-    }
+    // 실데이터 도착 전: 가짜 예보 대신 로딩 표시
+    forecastWeeklyContainer.innerHTML =
+      `<div class="forecast-loading"><i class="fa-solid fa-satellite-dish"></i> 실시간 예보 불러오는 중…</div>`;
   }
 }
 
@@ -930,6 +922,7 @@ async function refreshAllBeaches() {
         const sky = WMO_MAP[cur.weather_code] || WMO_MAP[0];
         // Open-Meteo의 풍속은 m/s. 풍향은 degree.
         Object.assign(data, {
+          liveWeather: true,
           skyCode: sky.code,
           skyText: sky.text,
           temp: round1(cur.temperature_2m ?? w.hourly.temperature_2m[idx]),
@@ -945,6 +938,7 @@ async function refreshAllBeaches() {
         const m = await fetchMarine(key);
         const mCur = m.current || {};
         Object.assign(data, {
+          liveMarine: true,
           waveHeight: round1(mCur.wave_height ?? beachData[key].waveHeight ?? 0),
           wavePeriod: round1(mCur.wave_period ?? beachData[key].wavePeriod ?? 0),
           waterTemp: mCur.sea_surface_temperature != null
