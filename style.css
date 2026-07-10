@@ -1019,3 +1019,81 @@ body {
     grid-template-columns: 1fr;
   }
 }
+
+/* ==========================================
+   WEATHER ALERT BAR (특보 수준 자동 판정)
+   ========================================== */
+.weather-alert-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0.25rem 0 1.25rem;
+}
+
+.alert-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  font-size: 0.8rem;
+  font-weight: 700;
+  padding: 0.4rem 0.85rem;
+  border-radius: 20px;
+  line-height: 1;
+}
+
+.alert-chip em {
+  font-style: normal;
+  font-weight: 400;
+  opacity: 0.85;
+}
+
+.alert-chip.none {
+  background: rgba(16, 185, 129, 0.12);
+  color: var(--color-success);
+  font-weight: 500;
+}
+
+.alert-chip.watch {
+  background: rgba(245, 158, 11, 0.15);
+  color: var(--color-warning);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+}
+
+.alert-chip.warning {
+  background: rgba(239, 68, 68, 0.18);
+  color: var(--color-danger);
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  animation: alert-blink 1.6s ease-in-out infinite;
+}
+
+@keyframes alert-blink {
+  50% { opacity: 0.55; }
+}
+
+.alert-note {
+  font-size: 0.68rem;
+  opacity: 0.5;
+  margin-left: auto;
+}
+
+/* 해변 카드의 특보 배지 */
+.beach-alert-badge {
+  margin-left: 0.4rem;
+  font-size: 0.8rem;
+  vertical-align: 1px;
+}
+
+.beach-alert-badge.watch { color: var(--color-warning); }
+
+.beach-alert-badge.warning {
+  color: var(--color-danger);
+  animation: alert-blink 1.6s ease-in-out infinite;
+}
+
+@media (max-width: 640px) {
+  .alert-note {
+    margin-left: 0;
+    width: 100%;
+  }
+}
