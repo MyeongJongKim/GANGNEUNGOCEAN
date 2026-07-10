@@ -18,8 +18,7 @@ const beachData = {
     waveHeight: 1.2,
     wavePeriod: 7.5,
     waterTemp: 20.1,
-    humidity: 65,
-    tide: "만조 14:20 (+42)"
+    humidity: 65
   },
   anmok: {
     name: "안목해변",
@@ -32,8 +31,7 @@ const beachData = {
     waveHeight: 0.4,
     wavePeriod: 4.5,
     waterTemp: 21.0,
-    humidity: 68,
-    tide: "간조 08:35 (-12)"
+    humidity: 68
   },
   gangmun: {
     name: "강문해변",
@@ -46,8 +44,7 @@ const beachData = {
     waveHeight: 1.0,
     wavePeriod: 6.2,
     waterTemp: 20.3,
-    humidity: 72,
-    tide: "만조 15:10 (+38)"
+    humidity: 72
   },
   jumunjin: {
     name: "주문진해변",
@@ -60,8 +57,7 @@ const beachData = {
     waveHeight: 1.8,
     wavePeriod: 8.5,
     waterTemp: 19.2,
-    humidity: 60,
-    tide: "만조 13:50 (+55)"
+    humidity: 60
   },
   geumjin: {
     name: "금진해변",
@@ -74,8 +70,7 @@ const beachData = {
     waveHeight: 1.5,
     wavePeriod: 9.0,
     waterTemp: 19.8,
-    humidity: 62,
-    tide: "간조 09:15 (-18)"
+    humidity: 62
   }
 };
 
@@ -690,7 +685,7 @@ function renderDashboardDetails() {
   valWavePeriodEl.textContent = liveM ? `${data.wavePeriod}초` : "--";
   valWaterTempEl.textContent = liveM ? `${data.waterTemp}°C` : "--";
   valHumidityEl.textContent = liveW ? `${data.humidity}%` : "--";
-  valTideEl.textContent = data.tide;
+  valTideEl.textContent = liveM ? data.tide : "--";
 
   overlayWaveHeight.textContent = liveM ? `${data.waveHeight}m` : "--";
   overlayWavePeriod.textContent = liveM ? `${data.wavePeriod}s` : "--";
@@ -879,12 +874,59 @@ async function fetchWeather(key) {
 const MARINE_OFFSHORE_LON_OFFSET = 0.05;
 const MARINE_FALLBACK = { lat: 37.79, lon: 128.97 };
 
-async function fetchMarineAt(lat, lon) {
+async function fetchMarineAt(lat, lon, includeTide) {
+  const tideVar = includeTide ? ",sea_level_height_msl" : "";
   const url = `${OPEN_METEO_MARINE_BASE}?latitude=${lat}&longitude=${lon}` +
     `&current=wave_height,wave_period,wave_direction,sea_surface_temperature` +
-    `&hourly=wave_height,wave_period,wave_direction,sea_surface_temperature` +
+    `&hourly=wave_height,wave_period,wave_direction,sea_surface_temperature${tideVar}` +
     `&timezone=Asia%2FSeoul&forecast_days=3`;
   return fetchJson(url);
+}
+
+// 조위 변수 요청이 실패해도 파고 데이터는 잃지 않도록, 조위 포함 요청이
+// 실패하면 조위 없이 한 번 더 시도한다.
+async function fetchMarineAtSafe(lat, lon) {
+  try {
+    return await fetchMarineAt(lat, lon, true);
+  } catch (err) {
+    return fetchMarineAt(lat, lon, false);
+  }
+}
+
+// 시간별 조위(sea_level_height_msl, 평균해수면 기준 m)에서 현재 시각 이후의
+// 첫 극값(만조=극대/간조=극소)을 찾는다. 1시간 해상도이므로 이웃 3점
+// 파라볼릭 보간으로 분 단위 시각과 조위를 보정한다.
+function computeNextTideEvent(times, levels, nowMs) {
+  if (!Array.isArray(times) || !Array.isArray(levels)) return null;
+  for (let i = 1; i < levels.length - 1; i++) {
+    const tMs = new Date(times[i]).getTime();
+    if (tMs < nowMs) continue;
+    const prev = levels[i - 1], cur = levels[i], next = levels[i + 1];
+    if (prev == null || cur == null || next == null) continue;
+    const isMax = cur >= prev && cur > next;
+    const isMin = cur <= prev && cur < next;
+    if (!isMax && !isMin) continue;
+
+    const denom = prev - 2 * cur + next;
+    const frac = denom !== 0 ? 0.5 * (prev - next) / denom : 0; // [-0.5, 0.5]
+    const eventMs = tMs + frac * 3600 * 1000;
+    const level = cur - 0.25 * (prev - next) * frac;
+    return { type: isMax ? "만조" : "간조", timeMs: eventMs, level };
+  }
+  return null;
+}
+
+function formatTideLabel(marine) {
+  const h = marine && marine.hourly;
+  if (!h || !h.sea_level_height_msl) return null;
+  const ev = computeNextTideEvent(h.time, h.sea_level_height_msl, Date.now());
+  if (!ev) return null;
+  const d = new Date(ev.timeMs);
+  const hh = String(d.getHours()).padStart(2, "0");
+  const mm = String(d.getMinutes()).padStart(2, "0");
+  const cm = Math.round(ev.level * 100);
+  const sign = cm > 0 ? "+" : "";
+  return `${ev.type} ${hh}:${mm} (${sign}${cm}cm)`;
 }
 
 async function fetchMarine(key) {
@@ -895,12 +937,12 @@ async function fetchMarine(key) {
   const { lat, lon } = BEACH_COORDS[key];
   let data = null;
   try {
-    data = await fetchMarineAt(lat, round2(lon + MARINE_OFFSHORE_LON_OFFSET));
+    data = await fetchMarineAtSafe(lat, round2(lon + MARINE_OFFSHORE_LON_OFFSET));
   } catch (err) {
     data = null;
   }
   if (!data || !data.current || data.current.wave_height == null) {
-    data = await fetchMarineAt(MARINE_FALLBACK.lat, MARINE_FALLBACK.lon);
+    data = await fetchMarineAtSafe(MARINE_FALLBACK.lat, MARINE_FALLBACK.lon);
   }
   marineCaches[key] = { data, expiresAt: Date.now() + MARINE_REFRESH_MS };
   return data;
@@ -937,13 +979,17 @@ async function refreshAllBeaches() {
       try {
         const m = await fetchMarine(key);
         const mCur = m.current || {};
+        const tideLabel = formatTideLabel(m);
         Object.assign(data, {
           liveMarine: true,
           waveHeight: round1(mCur.wave_height ?? beachData[key].waveHeight ?? 0),
           wavePeriod: round1(mCur.wave_period ?? beachData[key].wavePeriod ?? 0),
           waterTemp: mCur.sea_surface_temperature != null
             ? round1(mCur.sea_surface_temperature)
-            : (beachData[key].waterTemp ?? 0)
+            : (beachData[key].waterTemp ?? 0),
+          // 격자에 조위 데이터가 없으면 "정보 없음"으로 표시
+          tide: tideLabel || "정보 없음",
+          liveTide: !!tideLabel
         });
       } catch (err) {
         errors.push({ key, type: "marine", err });
