@@ -22,14 +22,9 @@ python3 -m http.server 8000
 # → http://localhost:8000
 ```
 
-## 🔄 데이터 모드
+## 🔄 데이터 연동
 
-| 모드 | 데이터 소스 | 사용법 |
-|------|------------|--------|
-| **시뮬레이션** (기본) | 하드코딩 mock + 4초 fluctuate | 설정 > 데이터 모드 > "시뮬레이션" |
-| **실시간 API** | Open-Meteo Weather + Marine API | 설정 > 데이터 모드 > "실시간 외부 API 동기화 (Open-Meteo)" |
-
-설정 변경은 우측 상단 ⚙️ 버튼 → 데이터 모드 선택 → "적용하기" 클릭.
+페이지 로드 시 **자동으로** Open-Meteo Weather + Marine API에 연동됩니다. 사용자가 API 키를 입력하거나 데이터 모드를 선택할 필요가 없습니다. 우측 상단 ⚙️ 버튼은 파도 시뮬레이터의 파고/파주기를 잠시 테스트해보는 슬라이더와 수동 새로고침 버튼만 제공합니다.
 
 ## 📡 데이터 소스 (Open-Meteo)
 
@@ -67,7 +62,7 @@ GANGNEUNGOCEAN/
 │   ├── BEACH_COORDS, WMO_MAP 상수
 │   ├── fetchWeather / fetchMarine (캐싱 포함)
 │   ├── refreshAllBeaches (5개 좌표 + marine 1회)
-│   ├── renderForecast (API 모드 / 시뮬레이션 모드 분기)
+│   ├── renderForecast (시간별/주간 예보 렌더링)
 │   └── startLiveRefreshLoop (10분 주기 갱신)
 └── README.md
 ```
@@ -76,8 +71,7 @@ GANGNEUNGOCEAN/
 
 - **Weather**: 10분 캐시
 - **Marine**: 30분 캐시
-- **자동 갱신 주기**: 10분
-- **모드 저장**: `localStorage.gangneung-ocean-data-mode` (페이지 새로고침 후에도 유지)
+- **자동 갱신 주기**: 10분 (`startLiveRefreshLoop`, 페이지 진입 시 자동 시작)
 
 ## 📄 라이선스
 
