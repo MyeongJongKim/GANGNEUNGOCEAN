@@ -84,8 +84,9 @@ let waveSimulator = {
 
 // 1-1. LIVE DATA SOURCE CONFIG
 // Open-Meteo: 무료, API key 불필요, CORS 허용, 비상업용 무료.
-// Marine API는 0.08° 해상도라 5개 해변이 동일 해상 셀에 들어가므로
-// 파고/수온은 5개 해변이 같은 값을 공유한다 (라벨로 명시).
+// Marine 데이터는 해변별 앞바다 지점(해안 좌표에서 동쪽으로 보정)으로
+// 각각 조회해 해변마다 다른 파고/파주기/수온을 표시한다. 해안에 너무
+// 붙어 격자값이 비는 경우 강릉 앞바다 공용 지점으로 폴백한다.
 //
 // 페이지 로드 시 자동으로 Open-Meteo에 연동하며, 더 이상 사용자가 모드를
 // 선택할 필요가 없다 (시뮬레이션 모드는 더 이상 노출하지 않음).
@@ -135,8 +136,9 @@ const WMO_MAP = {
   99: { code: "rain",       text: "뇌우·우박" }
 };
 
-let weatherCache = { data: null, expiresAt: 0 };
-let marineCache  = { data: null, expiresAt: 0 };
+// 해변 키별 캐시 — 해변마다 좌표가 달라 응답도 다르다.
+const weatherCaches = {}; // key → { data, expiresAt }
+const marineCaches  = {}; // key → { data, expiresAt }
 let lastFetchError = null;
 
 // 푸터의 데이터 소스 라벨을 동적으로 갱신하는 헬퍼.
@@ -521,6 +523,64 @@ function calculateSwimIndex(waveH, waterTemp, windS) {
   return { score, grade, badgeClass, desc };
 }
 
+// 4-1. 기상 특보 수준 자동 판정
+// Open-Meteo 실황 기반 참고용 판정이며 기상청 공식 특보가 아니다.
+// (기상청 특보 API는 브라우저 CORS 차단으로 직접 연동 불가)
+// 임계값은 기상청 특보 발표 기준을 준용:
+//  - 풍랑: 유의파고 3m 초과 주의보 / 5m 초과 경보
+//  - 강풍: 풍속 14m/s 이상 주의보 / 21m/s 이상 경보
+//  - 폭염: 기온 33°C 이상 주의보 / 35°C 이상 경보
+//  - 뇌우·이안류: 주의 안내
+function computeBeachAlerts(data) {
+  const alerts = [];
+
+  if (data.waveHeight > 5) {
+    alerts.push({ level: "warning", icon: "fa-water", label: "풍랑 경보 수준", detail: `유의파고 ${data.waveHeight}m` });
+  } else if (data.waveHeight > 3) {
+    alerts.push({ level: "watch", icon: "fa-water", label: "풍랑 주의보 수준", detail: `유의파고 ${data.waveHeight}m` });
+  }
+
+  if (data.windSpeed >= 21) {
+    alerts.push({ level: "warning", icon: "fa-wind", label: "강풍 경보 수준", detail: `풍속 ${data.windSpeed}m/s` });
+  } else if (data.windSpeed >= 14) {
+    alerts.push({ level: "watch", icon: "fa-wind", label: "강풍 주의보 수준", detail: `풍속 ${data.windSpeed}m/s` });
+  }
+
+  if (data.temp >= 35) {
+    alerts.push({ level: "warning", icon: "fa-temperature-high", label: "폭염 경보 수준", detail: `기온 ${data.temp}°C` });
+  } else if (data.temp >= 33) {
+    alerts.push({ level: "watch", icon: "fa-temperature-high", label: "폭염 주의보 수준", detail: `기온 ${data.temp}°C` });
+  }
+
+  if (/뇌우/.test(data.skyText || "")) {
+    alerts.push({ level: "watch", icon: "fa-cloud-bolt", label: "뇌우 주의", detail: "낙뢰 위험 — 입수 금지" });
+  }
+
+  // 긴 주기의 높은 너울은 이안류(역파도) 발생 가능성이 높다.
+  if (data.waveHeight >= 1.5 && data.wavePeriod >= 8) {
+    alerts.push({ level: "watch", icon: "fa-person-drowning", label: "이안류 주의", detail: "긴 주기 너울 — 이안류 발생 가능" });
+  }
+
+  return alerts;
+}
+
+function renderAlerts() {
+  const bar = document.getElementById("weather-alert-bar");
+  if (!bar) return;
+  const data = beachData[currentBeachKey];
+  const alerts = computeBeachAlerts(data);
+  const note = `<span class="alert-note">Open-Meteo 실황 기반 자동 판정 · 공식 특보는 기상청 확인</span>`;
+
+  if (alerts.length === 0) {
+    bar.innerHTML =
+      `<span class="alert-chip none"><i class="fa-solid fa-circle-check"></i> ${data.name} 특보 수준 기상 없음</span>` + note;
+    return;
+  }
+  bar.innerHTML = alerts.map((a) =>
+    `<span class="alert-chip ${a.level}"><i class="fa-solid ${a.icon}"></i> ${a.label} <em>${a.detail}</em></span>`
+  ).join("") + note;
+}
+
 // 5. RENDER SYSTEM
 function renderBeachCards() {
   beachCardsContainer.innerHTML = "";
@@ -535,13 +595,21 @@ function renderBeachCards() {
     if (data.skyCode === "cloudy") iconClass = "fa-cloud";
     if (data.skyCode === "rain") iconClass = "fa-cloud-showers-heavy";
 
+    // 특보 수준 기상이면 카드에 경고 배지 표시 (경보 > 주의보 우선)
+    const alerts = computeBeachAlerts(data);
+    const alertLevel = alerts.some((a) => a.level === "warning")
+      ? "warning" : (alerts.length ? "watch" : null);
+    const alertBadge = alertLevel
+      ? `<span class="beach-alert-badge ${alertLevel}" title="${alerts.map((a) => a.label).join(", ")}"><i class="fa-solid fa-triangle-exclamation"></i></span>`
+      : "";
+
     const card = document.createElement("div");
     card.className = `beach-card ${isActive ? 'active' : ''}`;
     card.setAttribute("role", "button");
     card.setAttribute("tabindex", "0");
     card.innerHTML = `
       <div class="beach-card-header">
-        <h3>${data.name}</h3>
+        <h3>${data.name}${alertBadge}</h3>
         <span class="beach-tag">${data.tag}</span>
       </div>
       <div class="beach-card-stat">
@@ -617,6 +685,8 @@ function renderDashboardDetails() {
   swimBadge.textContent = swimResult.grade;
   swimBadge.className = `status-badge ${swimResult.badgeClass}`;
   swimDesc.textContent = swimResult.desc;
+
+  renderAlerts();
 }
 
 function renderForecast() {
@@ -624,8 +694,9 @@ function renderForecast() {
 
   // 페이지 로드 시 자동으로 Open-Meteo에 연동되므로,
   // 시뮬레이션 분기 없이 항상 캐시된 API 데이터로 렌더링한다.
-  const marine = marineCache.data;
-  const weather = weatherCache.data;
+  // 예보도 선택된 해변의 좌표로 받은 데이터를 사용한다.
+  const marine = marineCaches[currentBeachKey]?.data;
+  const weather = weatherCaches[currentBeachKey]?.data;
 
   // 1) Hourly Forecast
   forecastHourlyContainer.innerHTML = "";
@@ -793,10 +864,12 @@ async function fetchJson(url) {
   return res.json();
 }
 
-async function fetchWeather(lat, lon) {
-  if (weatherCache.data && weatherCache.expiresAt > Date.now()) {
-    return weatherCache.data;
+async function fetchWeather(key) {
+  const cached = weatherCaches[key];
+  if (cached && cached.data && cached.expiresAt > Date.now()) {
+    return cached.data;
   }
+  const { lat, lon } = BEACH_COORDS[key];
   const url = `${OPEN_METEO_BASE}?latitude=${lat}&longitude=${lon}` +
     `&current=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code` +
     `&hourly=temperature_2m,relative_humidity_2m,wind_speed_10m,wind_direction_10m,weather_code,precipitation_probability` +
@@ -804,79 +877,87 @@ async function fetchWeather(lat, lon) {
     `&wind_speed_unit=ms` + // m/s 단위 (기본 km/h)
     `&timezone=Asia%2FSeoul&forecast_days=5`;
   const data = await fetchJson(url);
-  weatherCache = { data, expiresAt: Date.now() + WEATHER_REFRESH_MS };
+  weatherCaches[key] = { data, expiresAt: Date.now() + WEATHER_REFRESH_MS };
   return data;
 }
 
-async function fetchMarine(lat, lon) {
-  if (marineCache.data && marineCache.expiresAt > Date.now()) {
-    return marineCache.data;
-  }
+// 해변별 파고 차별화를 위해 Marine은 해변마다 앞바다 지점으로 조회한다.
+// 해안 좌표 그대로 조회하면 육지 격자에 걸려 값이 빌 수 있어 동쪽(외해)으로
+// 0.05° 보정한다. 그래도 값이 비면 강릉 앞바다 공용 지점으로 폴백.
+const MARINE_OFFSHORE_LON_OFFSET = 0.05;
+const MARINE_FALLBACK = { lat: 37.79, lon: 128.97 };
+
+async function fetchMarineAt(lat, lon) {
   const url = `${OPEN_METEO_MARINE_BASE}?latitude=${lat}&longitude=${lon}` +
     `&current=wave_height,wave_period,wave_direction,sea_surface_temperature` +
     `&hourly=wave_height,wave_period,wave_direction,sea_surface_temperature` +
     `&timezone=Asia%2FSeoul&forecast_days=3`;
-  const data = await fetchJson(url);
-  marineCache = { data, expiresAt: Date.now() + MARINE_REFRESH_MS };
-  return data;
+  return fetchJson(url);
 }
 
-// 5개 좌표(또는 첫 번째) 평균을 대표 marine으로 사용한다.
-// Open-Meteo Marine은 0.08° 해상도라 사실상 같은 값이지만, 키 별로 호출해
-// 같은 값을 받아오는 비용을 줄이기 위해 강릉 중심 좌표(37.79, 128.92)로 1회만 호출.
-const MARINE_REPRESENTATIVE = { lat: 37.79, lon: 128.92 };
+async function fetchMarine(key) {
+  const cached = marineCaches[key];
+  if (cached && cached.data && cached.expiresAt > Date.now()) {
+    return cached.data;
+  }
+  const { lat, lon } = BEACH_COORDS[key];
+  let data = null;
+  try {
+    data = await fetchMarineAt(lat, round2(lon + MARINE_OFFSHORE_LON_OFFSET));
+  } catch (err) {
+    data = null;
+  }
+  if (!data || !data.current || data.current.wave_height == null) {
+    data = await fetchMarineAt(MARINE_FALLBACK.lat, MARINE_FALLBACK.lon);
+  }
+  marineCaches[key] = { data, expiresAt: Date.now() + MARINE_REFRESH_MS };
+  return data;
+}
 
 async function refreshAllBeaches() {
   const updated = [];
   const errors = [];
 
-  // Weather는 5개 좌표 모두 (육상 풍향/기온은 해변별로 다름)
+  // 해변별로 Weather(육상)와 Marine(해상)을 각각 조회한다.
   await Promise.all(
     Object.keys(BEACH_COORDS).map(async (key) => {
-      const { lat, lon } = BEACH_COORDS[key];
+      const data = {};
+
       try {
-        const w = await fetchWeather(lat, lon);
+        const w = await fetchWeather(key);
         const idx = pickCurrentIndex(w.hourly?.time, w.current?.time);
         const cur = w.current || {};
         const sky = WMO_MAP[cur.weather_code] || WMO_MAP[0];
         // Open-Meteo의 풍속은 m/s. 풍향은 degree.
-        const data = {
+        Object.assign(data, {
           skyCode: sky.code,
           skyText: sky.text,
           temp: round1(cur.temperature_2m ?? w.hourly.temperature_2m[idx]),
           windDir: vecToDirLabel(cur.wind_direction_10m ?? w.hourly.wind_direction_10m[idx]),
           windSpeed: round1(cur.wind_speed_10m ?? w.hourly.wind_speed_10m[idx]),
           humidity: Math.round(cur.relative_humidity_2m ?? w.hourly.relative_humidity_2m[idx] ?? 0)
-        };
-        updated.push({ key, data });
+        });
       } catch (err) {
         errors.push({ key, type: "weather", err });
       }
+
+      try {
+        const m = await fetchMarine(key);
+        const mCur = m.current || {};
+        Object.assign(data, {
+          waveHeight: round1(mCur.wave_height ?? beachData[key].waveHeight ?? 0),
+          wavePeriod: round1(mCur.wave_period ?? beachData[key].wavePeriod ?? 0),
+          waterTemp: mCur.sea_surface_temperature != null
+            ? round1(mCur.sea_surface_temperature)
+            : (beachData[key].waterTemp ?? 0)
+        });
+      } catch (err) {
+        errors.push({ key, type: "marine", err });
+      }
+
+      if (Object.keys(data).length) updated.push({ key, data });
     })
   );
-
-  // Marine은 1회 (해상 광역 데이터, 5개 해변이 동일 값)
-  let marine = null;
-  try {
-    marine = await fetchMarine(MARINE_REPRESENTATIVE.lat, MARINE_REPRESENTATIVE.lon);
-    const mCur = marine.current || {};
-    const waveH = round1(mCur.wave_height ?? 0);
-    const waveP = round1(mCur.wave_period ?? 0);
-    const sst   = mCur.sea_surface_temperature != null ? round1(mCur.sea_surface_temperature) : null;
-    Object.keys(BEACH_COORDS).forEach((key) => {
-      const existing = updated.find((u) => u.key === key);
-      const target = existing || { key, data: {} };
-      target.data = {
-        ...target.data,
-        waveHeight: waveH,
-        wavePeriod: waveP,
-        waterTemp: sst != null ? sst : (beachData[key].waterTemp ?? 0)
-      };
-      if (!existing) updated.push(target);
-    });
-  } catch (err) {
-    errors.push({ type: "marine", err });
-  }
 
   updated.forEach(({ key, data }) => {
     beachData[key] = { ...beachData[key], ...data };
